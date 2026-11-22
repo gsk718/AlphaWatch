@@ -194,7 +194,7 @@ def test_benchmark_missing_middle_date_rejects_annualized_daily_metrics():
 def test_historical_fetch_uses_warmup_and_inclusive_end(monkeypatch):
     calls = []
     raw = pd.DataFrame({("Open", "TEST"): [9, 10], ("Close", "TEST"): [10, 11]}, index=pd.to_datetime(["2024-12-31", "2025-01-01"]))
-    monkeypatch.setattr(fetcher, "_download_with_retries", lambda ticker, params, *args: calls.append((ticker, params)) or raw)
+    monkeypatch.setattr(fetcher, "_download_with_retries", lambda ticker, params, *args, **kwargs: calls.append((ticker, params)) or raw)
     result = fetcher.fetch_historical_data("TEST", date(2025, 1, 1), date(2025, 1, 5), warmup_days=90)
     assert calls[0][1]["start"] == "2024-10-03"
     assert calls[0][1]["end"] == "2025-01-06"

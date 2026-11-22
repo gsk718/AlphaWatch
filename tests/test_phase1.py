@@ -93,7 +93,7 @@ def test_fetch_validates_ticker_and_normalizes_provider_frame(monkeypatch):
         fetcher.validate_ticker("BAD TICKER!")
     raw = pd.DataFrame({("Close", "AAPL"): [11, 10, 12]}, index=pd.to_datetime(["2025-01-03", "2025-01-01", "2025-01-02"]))
     monkeypatch.setattr(fetcher.yf, "download", lambda *a, **k: raw)
-    monkeypatch.setattr(fetcher, "_throttle", lambda interval: None)
+    monkeypatch.setattr(fetcher, "_throttle", lambda interval, **kwargs: None)
     out = fetcher.fetch_stock_data("aapl", retries=0, request_interval=0)
     assert out.Date.tolist() == [date(2025, 1, 1), date(2025, 1, 2), date(2025, 1, 3)]
     assert out.Close.tolist() == [10, 12, 11]
@@ -108,7 +108,7 @@ def test_fetch_retries_with_exponential_backoff_and_jitter(monkeypatch):
             raise RuntimeError("429 rate limit")
         return raw
     monkeypatch.setattr(fetcher.yf, "download", flaky)
-    monkeypatch.setattr(fetcher, "_throttle", lambda interval: None)
+    monkeypatch.setattr(fetcher, "_throttle", lambda interval, **kwargs: None)
     fetcher.fetch_stock_data("AAPL", retries=2, backoff=0.5, jitter=0.2, request_interval=0, sleep=delays.append, random_uniform=lambda a, b: b)
     assert len(attempts) == 3
     assert delays == [0.7, 1.2]
@@ -116,7 +116,7 @@ def test_fetch_retries_with_exponential_backoff_and_jitter(monkeypatch):
 
 def test_retry_exhaustion_and_nonretryable_provider_error(monkeypatch):
     calls = []
-    monkeypatch.setattr(fetcher, "_throttle", lambda interval: None)
+    monkeypatch.setattr(fetcher, "_throttle", lambda interval, **kwargs: None)
     monkeypatch.setattr(fetcher.yf, "download", lambda *a, **k: calls.append(1) or (_ for _ in ()).throw(RuntimeError("503 temporarily unavailable")))
     with pytest.raises(ProviderUnavailableError):
         fetcher.fetch_stock_data("AAPL", retries=1, request_interval=0, backoff=0, jitter=0, sleep=lambda _: None)
@@ -157,7 +157,7 @@ def test_request_throttle_spaces_provider_calls(monkeypatch):
     waits = []
     monkeypatch.setattr(fetcher.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(fetcher.time, "sleep", waits.append)
-    fetcher._last_request = 0.0
+    monkeypatch.setattr(fetcher, "_last_request", 0.0)
     fetcher._throttle(0.5)
     fetcher._throttle(0.5)
     assert waits == pytest.approx([0.4])

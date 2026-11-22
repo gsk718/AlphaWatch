@@ -312,6 +312,8 @@ Market-data retrieval can be configured using:
 - `DATA_RETRY_BACKOFF_SECONDS`
 - `DATA_RETRY_JITTER_SECONDS`
 - `DATA_REQUEST_INTERVAL_SECONDS`
+- `DATA_REQUEST_TIMEOUT_SECONDS` (per-download provider timeout; defaults to `15` seconds and is capped by the remaining total deadline)
+- `DATA_FETCH_DEADLINE_SECONDS` (defaults to `30` seconds; limits one fetch lifecycle including throttling and retry waits)
 
 ## Running Tests
 

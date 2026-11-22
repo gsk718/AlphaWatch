@@ -30,16 +30,51 @@ def validate_ticker(ticker: str) -> str:
     return normalized
 
 
-def _throttle(interval: float):
+def _throttle(interval: float, deadline=None, monotonic=None, sleep=None):
     global _last_request
+    monotonic = monotonic or time.monotonic
+    sleep = sleep or time.sleep
+    def remaining():
+        return None if deadline is None else deadline - monotonic()
+
     if interval <= 0:
+        if deadline is not None and remaining() <= 0:
+            raise ProviderUnavailableError()
         return
+    # Acquire only within the remaining budget. Reserve the next slot while holding
+    # the lock, then release it before sleeping so concurrent callers cannot bypass spacing.
+    timeout = remaining()
+    acquired = _throttle_lock.acquire() if timeout is None else _throttle_lock.acquire(timeout=max(0.0, timeout))
+    if not acquired:
+        raise ProviderUnavailableError()
+    try:
+        now = monotonic()
+        left = None if deadline is None else deadline - now
+        if left is not None and left <= 0:
+            raise ProviderUnavailableError()
+        slot = max(now, _last_request + interval)
+        wait = max(0.0, slot - now)
+        if left is not None and wait >= left:
+            failed_wait = left
+        else:
+            failed_wait = None
+            _last_request = slot
+    finally:
+        _throttle_lock.release()
+    if failed_wait is not None:
+        sleep(failed_wait)
+        raise ProviderUnavailableError()
+    if wait:
+        left = remaining()
+        if left is not None and left <= 0:
+            raise ProviderUnavailableError()
+        sleep(wait if left is None else min(wait, left))
+        if deadline is not None and remaining() <= 0:
+            raise ProviderUnavailableError()
+    # Record actual completion time while preserving any later slot reserved by a
+    # concurrent caller.
     with _throttle_lock:
-        now = time.monotonic()
-        wait = max(0.0, _last_request + interval - now)
-        if wait:
-            time.sleep(wait)
-        _last_request = time.monotonic()
+        _last_request = max(_last_request, monotonic())
 
 
 def _normalize_market_frame(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
@@ -83,6 +118,18 @@ def _request_timeout_seconds() -> float:
     return timeout
 
 
+def _fetch_deadline_seconds() -> float:
+    """Read and validate the total market-data fetch budget."""
+    raw = os.getenv("DATA_FETCH_DEADLINE_SECONDS", "30")
+    try:
+        deadline = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise InvalidRequestError("DATA_FETCH_DEADLINE_SECONDS must be a finite positive number") from exc
+    if not math.isfinite(deadline) or deadline <= 0:
+        raise InvalidRequestError("DATA_FETCH_DEADLINE_SECONDS must be a finite positive number")
+    return deadline
+
+
 def fetch_stock_data(
     ticker,
     period="6mo",
@@ -104,24 +151,43 @@ def fetch_stock_data(
     jitter = float(os.getenv("DATA_RETRY_JITTER_SECONDS", "0.25")) if jitter is None else jitter
     request_interval = float(os.getenv("DATA_REQUEST_INTERVAL_SECONDS", "0.1")) if request_interval is None else request_interval
     request_timeout = _request_timeout_seconds()
+    fetch_budget = _fetch_deadline_seconds()
     if retries < 0 or backoff < 0 or jitter < 0 or request_interval < 0:
         raise InvalidRequestError("Retry and throttle settings must be nonnegative")
 
+    deadline = time.monotonic() + fetch_budget
     frame = _download_with_retries(
         ticker, {"period": period, "interval": interval, "timeout": request_timeout}, retries, backoff, jitter,
-        request_interval, sleep, random_uniform,
+        request_interval, sleep, random_uniform, deadline=deadline, monotonic=time.monotonic,
     )
     return _normalize_market_frame(frame, ticker)
 
 
-def _download_with_retries(ticker, params, retries, backoff, jitter, request_interval, sleep, random_uniform):
+def _download_with_retries(ticker, params, retries, backoff, jitter, request_interval, sleep, random_uniform, deadline=None, monotonic=None):
+    monotonic = monotonic or time.monotonic
     last_error = None
     for attempt in range(retries + 1):
         try:
-            _throttle(request_interval)
+            remaining = None if deadline is None else deadline - monotonic()
+            if remaining is not None and remaining <= 0:
+                raise ProviderUnavailableError()
+            _throttle(request_interval, deadline=deadline, monotonic=monotonic, sleep=sleep)
+            remaining = None if deadline is None else deadline - monotonic()
+            if remaining is not None and remaining <= 0:
+                raise ProviderUnavailableError()
             logger.info("Fetching market data", extra={"ticker": ticker, "operation": "fetch", "attempt": attempt + 1})
-            return yf.download(ticker, progress=False, auto_adjust=False, **params)
+            call_params = dict(params)
+            if remaining is not None:
+                call_params["timeout"] = min(call_params["timeout"], remaining)
+            result = yf.download(ticker, progress=False, auto_adjust=False, **call_params)
+            if deadline is not None and monotonic() >= deadline:
+                raise ProviderUnavailableError()
+            return result
         except Exception as exc:
+            if isinstance(exc, ProviderUnavailableError):
+                raise
+            if deadline is not None and monotonic() >= deadline:
+                raise ProviderUnavailableError() from (None if isinstance(exc, ProviderUnavailableError) else exc)
             last_error = exc
             message = str(exc).lower()
             retryable = any(token in message for token in ("rate limit", "too many requests", "429", "timeout", "timed out", "temporar", "503", "502", "connection"))
@@ -131,7 +197,15 @@ def _download_with_retries(ticker, params, retries, backoff, jitter, request_int
             if attempt < retries:
                 delay = backoff * (2 ** attempt) + random_uniform(0.0, jitter)
                 logger.warning("Retrying provider request", extra={"ticker": ticker, "operation": "fetch", "attempt": attempt + 1, "retry_delay_seconds": delay})
+                remaining = None if deadline is None else deadline - monotonic()
+                if remaining is not None and remaining <= 0:
+                    raise ProviderUnavailableError() from exc
+                if remaining is not None and delay >= remaining:
+                    sleep(remaining)
+                    raise ProviderUnavailableError() from exc
                 sleep(delay)
+                if deadline is not None and monotonic() >= deadline:
+                    raise ProviderUnavailableError() from exc
     logger.error("Provider retries exhausted", extra={"ticker": ticker, "operation": "fetch", "attempts": retries + 1})
     raise ProviderUnavailableError() from last_error
 
@@ -152,12 +226,14 @@ def fetch_historical_data(ticker: str, start_date: date, end_date: date, warmup_
     jitter = float(os.getenv("DATA_RETRY_JITTER_SECONDS", "0.25"))
     interval = float(os.getenv("DATA_REQUEST_INTERVAL_SECONDS", "0.1"))
     request_timeout = _request_timeout_seconds()
+    fetch_budget = _fetch_deadline_seconds()
+    deadline = time.monotonic() + fetch_budget
     raw = _download_with_retries(ticker, {
         "start": (start_date - timedelta(days=warmup_days)).isoformat(),
         "end": (end_date + timedelta(days=1)).isoformat(),
         "interval": "1d",
         "timeout": request_timeout,
-    }, retries, backoff, jitter, interval, time.sleep, random.uniform)
+    }, retries, backoff, jitter, interval, time.sleep, random.uniform, deadline=deadline, monotonic=time.monotonic)
     if raw.empty:
         raise NoMarketDataError()
     if isinstance(raw.columns, pd.MultiIndex):
