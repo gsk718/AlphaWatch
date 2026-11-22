@@ -6,6 +6,7 @@ import sys
 from fastapi.testclient import TestClient
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -75,6 +76,30 @@ def test_empty_page_and_summary_excludes_full_payload(db_context):
         "benchmark_annualized_return", "benchmark_maximum_drawdown", "created_at",
     }
     assert "results" not in item and "large" not in response.text
+
+
+def test_list_query_does_not_select_results_json_column(db_context):
+    _, _, _, engine = db_context
+    statements = []
+
+    def capture_select(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", capture_select)
+    try:
+        response = TestClient(main.app).get("/history/backtests")
+    finally:
+        event.remove(engine, "before_cursor_execute", capture_select)
+
+    assert response.status_code == 200
+    list_selects = [
+        statement for statement in statements
+        if "FROM backtest_results" in statement and "COUNT(" not in statement.upper()
+    ]
+    assert len(list_selects) == 1
+    selected_columns = list_selects[0].split("FROM", 1)[0].lower()
+    assert "backtest_results.results" not in selected_columns
 
 
 def test_multiple_records_filter_normalization_pagination_and_total(db_context):

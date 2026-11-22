@@ -326,10 +326,29 @@ def get_backtest_history(
     if ticker is not None:
         query = query.filter(BacktestResult.ticker == validate_ticker(ticker))
     total = query.with_entities(func.count(BacktestResult.id)).scalar()
-    rows = (query.order_by(BacktestResult.created_at.desc(), BacktestResult.id.desc())
+    summary_columns = (
+        BacktestResult.id,
+        BacktestResult.ticker,
+        BacktestResult.requested_start_date,
+        BacktestResult.requested_end_date,
+        BacktestResult.evaluation_start_date,
+        BacktestResult.evaluation_end_date,
+        BacktestResult.initial_capital,
+        BacktestResult.final_portfolio_value,
+        BacktestResult.total_return,
+        BacktestResult.annualized_return,
+        BacktestResult.maximum_drawdown,
+        BacktestResult.sharpe_ratio,
+        BacktestResult.benchmark_return,
+        BacktestResult.benchmark_annualized_return,
+        BacktestResult.benchmark_maximum_drawdown,
+        BacktestResult.created_at,
+    )
+    rows = (query.with_entities(*summary_columns)
+            .order_by(BacktestResult.created_at.desc(), BacktestResult.id.desc())
             .offset(offset).limit(limit).all())
     return HistoricalBacktestPage(
-        items=[HistoricalBacktestResponse.model_validate(row) for row in rows],
+        items=[HistoricalBacktestResponse.model_validate(row._mapping) for row in rows],
         limit=limit,
         offset=offset,
         total=total or 0,
