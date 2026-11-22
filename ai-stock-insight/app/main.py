@@ -129,6 +129,34 @@ class HistoricalAnalysisPage(BaseModel):
     total: int
 
 
+class HistoricalBacktestResponse(BaseModel):
+    id: int
+    ticker: str
+    requested_start_date: date
+    requested_end_date: date
+    evaluation_start_date: date
+    evaluation_end_date: date
+    initial_capital: float
+    final_portfolio_value: float
+    total_return: float
+    annualized_return: float | None
+    maximum_drawdown: float
+    sharpe_ratio: float | None
+    benchmark_return: float
+    benchmark_annualized_return: float | None
+    benchmark_maximum_drawdown: float
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class HistoricalBacktestPage(BaseModel):
+    items: list[HistoricalBacktestResponse]
+    limit: int
+    offset: int
+    total: int
+
+
 class RankingRequest(BaseModel):
     tickers: list[str] = Field(min_length=1, max_length=50)
     period: Literal["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"] = "6mo"
@@ -285,6 +313,35 @@ def get_ticker_analysis_history(
     db: Session = Depends(get_db),
 ):
     return _analysis_history_query(db, ticker, start_date, end_date, limit, offset)
+
+
+@app.get("/history/backtests", response_model=HistoricalBacktestPage)
+def get_backtest_history(
+    ticker: str | None = None,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    query = db.query(BacktestResult)
+    if ticker is not None:
+        query = query.filter(BacktestResult.ticker == validate_ticker(ticker))
+    total = query.with_entities(func.count(BacktestResult.id)).scalar()
+    rows = (query.order_by(BacktestResult.created_at.desc(), BacktestResult.id.desc())
+            .offset(offset).limit(limit).all())
+    return HistoricalBacktestPage(
+        items=[HistoricalBacktestResponse.model_validate(row) for row in rows],
+        limit=limit,
+        offset=offset,
+        total=total or 0,
+    )
+
+
+@app.get("/history/backtests/{backtest_id}", response_model=BacktestResponse)
+def get_backtest_history_item(backtest_id: int, db: Session = Depends(get_db)):
+    record = db.query(BacktestResult).filter(BacktestResult.id == backtest_id).first()
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Backtest {backtest_id} not found")
+    return BacktestResponse.model_validate(record.results)
 
 
 @app.post("/ranking", response_model=RankingResponse, responses={
