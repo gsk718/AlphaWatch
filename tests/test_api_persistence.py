@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import StaticPool
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ai-stock-insight"))
@@ -141,3 +142,76 @@ def test_database_failure_rolls_back_returns_controlled_error_and_closes(monkeyp
     assert sessions and len(closed) == len(sessions) == 1
     with factory() as db:
         assert db.query(StockAnalysis).count() == 0
+
+
+def test_commit_failure_after_flush_rolls_back_record_and_closes_request_session(monkeypatch, db_context):
+    factory, sessions, closed, _ = db_context
+    monkeypatch.setattr(main, "fetch_stock_data", lambda *args, **kwargs: rising_prices())
+
+    def fail_commit(self):
+        self.flush()
+        raise RuntimeError("simulated commit failure")
+
+    monkeypatch.setattr("sqlalchemy.orm.Session.commit", fail_commit)
+    response = TestClient(main.app).get("/analysis/AAPL")
+
+    assert response.status_code == 500
+    assert response.json() == {"error": {"code": "internal_error", "message": "Internal server error."}}
+    assert len(sessions) == len(closed) == 1
+    assert closed[0] is sessions[0]
+    with factory() as db:
+        assert db.query(StockAnalysis).filter_by(ticker="AAPL").count() == 0
+
+
+def test_commit_failure_rollback_failure_preserves_original_cause_and_safe_response(monkeypatch, db_context):
+    _, sessions, closed, _ = db_context
+    monkeypatch.setattr(main, "fetch_stock_data", lambda *args, **kwargs: rising_prices())
+    commit_error = SQLAlchemyError("postgres://user:password@host/db; SELECT secret")
+
+    def fail_commit(self):
+        raise commit_error
+
+    def fail_rollback(self):
+        raise RuntimeError("rollback secret")
+
+    monkeypatch.setattr("sqlalchemy.orm.Session.commit", fail_commit)
+    monkeypatch.setattr("sqlalchemy.orm.Session.rollback", fail_rollback)
+    response = TestClient(main.app).get("/analysis/AAPL")
+    assert response.status_code == 500
+    assert response.json() == {"error": {"code": "internal_error", "message": "Internal server error."}}
+    assert "secret" not in response.text and "postgres://" not in response.text
+    assert len(sessions) == len(closed) == 1
+
+    class BrokenSession:
+        def add(self, record):
+            pass
+
+        def commit(self):
+            raise commit_error
+
+        def rollback(self):
+            raise RuntimeError("rollback secret")
+
+    with pytest.raises(main.PersistenceFailure) as raised:
+        main._persist(BrokenSession(), object())
+    assert raised.value.__cause__ is commit_error
+
+
+def test_commit_failure_with_successful_rollback_keeps_persistence_failure(monkeypatch):
+    commit_error = RuntimeError("commit failed")
+    calls = []
+
+    class BrokenSession:
+        def add(self, record):
+            pass
+
+        def commit(self):
+            raise commit_error
+
+        def rollback(self):
+            calls.append("rollback")
+
+    with pytest.raises(main.PersistenceFailure) as raised:
+        main._persist(BrokenSession(), object())
+    assert calls == ["rollback"]
+    assert raised.value.__cause__ is commit_error

@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy import event
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -138,3 +140,18 @@ def test_invalid_pagination_and_session_cleanup(db_context):
         assert client.get(f"/history/backtests?{params}").status_code == 422
     assert client.get("/history/backtests").status_code == 200
     assert len(sessions) == len(closed) == 4
+
+
+@pytest.mark.parametrize("path", ["/history/backtests", "/history/backtests/1"])
+def test_backtest_history_database_errors_are_safe_and_close_session(monkeypatch, db_context, path):
+    _, sessions, closed, _ = db_context
+
+    def fail_query(self, *args, **kwargs):
+        raise OperationalError("SELECT secret", {}, RuntimeError("password=secret"))
+
+    monkeypatch.setattr(Session, "query", fail_query)
+    response = TestClient(main.app).get(path)
+    assert response.status_code == 500
+    assert response.json() == {"error": {"code": "database_error", "message": "A database error occurred."}}
+    assert "secret" not in response.text and "SELECT" not in response.text
+    assert len(sessions) == len(closed) == 1

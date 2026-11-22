@@ -76,7 +76,13 @@ def _persist(db: Session, record) -> None:
         db.add(record)
         db.commit()
     except Exception as exc:
-        db.rollback()
+        try:
+            db.rollback()
+        except Exception as rollback_exc:
+            logger.error(
+                "Database persistence rollback failed",
+                extra={"operation": "database_persistence_rollback", "error_type": type(rollback_exc).__name__},
+            )
         logger.error(
             "Database persistence failed",
             extra={"operation": "database_persistence", "error_type": type(exc).__name__},
@@ -201,6 +207,12 @@ async def domain_exception_handler(request: Request, exc: AlphaWatchError):
 @app.exception_handler(PersistenceFailure)
 async def persistence_exception_handler(request: Request, exc: PersistenceFailure):
     return JSONResponse(status_code=500, content={"error": {"code": "internal_error", "message": "Internal server error."}})
+
+
+@app.exception_handler(SQLAlchemyError)
+async def database_exception_handler(request: Request, exc: SQLAlchemyError):
+    logger.error("Database request failed", extra={"operation": "database_read", "endpoint": request.url.path, "error_type": type(exc).__name__})
+    return JSONResponse(status_code=500, content={"error": {"code": "database_error", "message": "A database error occurred."}})
 
 
 @app.exception_handler(RequestValidationError)
