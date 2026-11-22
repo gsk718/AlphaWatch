@@ -1,6 +1,7 @@
 """Throttled, bounded market data retrieval with retry and per-symbol isolation."""
 
 import logging
+import math
 import os
 import random
 import re
@@ -70,6 +71,18 @@ def _normalize_market_frame(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
     return df
 
 
+def _request_timeout_seconds() -> float:
+    """Read and validate the configured per-request provider timeout."""
+    raw = os.getenv("DATA_REQUEST_TIMEOUT_SECONDS", "15")
+    try:
+        timeout = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise InvalidRequestError("DATA_REQUEST_TIMEOUT_SECONDS must be a finite positive number") from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise InvalidRequestError("DATA_REQUEST_TIMEOUT_SECONDS must be a finite positive number")
+    return timeout
+
+
 def fetch_stock_data(
     ticker,
     period="6mo",
@@ -90,11 +103,12 @@ def fetch_stock_data(
     backoff = float(os.getenv("DATA_RETRY_BACKOFF_SECONDS", "0.5")) if backoff is None else backoff
     jitter = float(os.getenv("DATA_RETRY_JITTER_SECONDS", "0.25")) if jitter is None else jitter
     request_interval = float(os.getenv("DATA_REQUEST_INTERVAL_SECONDS", "0.1")) if request_interval is None else request_interval
+    request_timeout = _request_timeout_seconds()
     if retries < 0 or backoff < 0 or jitter < 0 or request_interval < 0:
         raise InvalidRequestError("Retry and throttle settings must be nonnegative")
 
     frame = _download_with_retries(
-        ticker, {"period": period, "interval": interval}, retries, backoff, jitter,
+        ticker, {"period": period, "interval": interval, "timeout": request_timeout}, retries, backoff, jitter,
         request_interval, sleep, random_uniform,
     )
     return _normalize_market_frame(frame, ticker)
@@ -137,10 +151,12 @@ def fetch_historical_data(ticker: str, start_date: date, end_date: date, warmup_
     backoff = float(os.getenv("DATA_RETRY_BACKOFF_SECONDS", "0.5"))
     jitter = float(os.getenv("DATA_RETRY_JITTER_SECONDS", "0.25"))
     interval = float(os.getenv("DATA_REQUEST_INTERVAL_SECONDS", "0.1"))
+    request_timeout = _request_timeout_seconds()
     raw = _download_with_retries(ticker, {
         "start": (start_date - timedelta(days=warmup_days)).isoformat(),
         "end": (end_date + timedelta(days=1)).isoformat(),
         "interval": "1d",
+        "timeout": request_timeout,
     }, retries, backoff, jitter, interval, time.sleep, random.uniform)
     if raw.empty:
         raise NoMarketDataError()

@@ -230,6 +230,7 @@ Market-data retrieval can be configured using:
 - `DATA_RETRY_BACKOFF_SECONDS`
 - `DATA_RETRY_JITTER_SECONDS`
 - `DATA_REQUEST_INTERVAL_SECONDS`
+- `DATA_REQUEST_TIMEOUT_SECONDS` (per-download provider timeout in seconds; defaults to `15` and must be finite and greater than zero)
 
 ## Running Tests
 
