@@ -142,6 +142,20 @@ The API will be available at:
 - API: http://127.0.0.1:8000
 - Interactive Swagger documentation: http://127.0.0.1:8000/docs
 
+### PostgreSQL integration tests
+
+PostgreSQL integration tests are skipped during ordinary `pytest` runs. They only run when explicitly enabled with `RUN_POSTGRES_TESTS=1` and a valid `TEST_DATABASE_URL`. The URL validator restricts the target database to `alphawatch_test` and local/approved hosts; the normal `DATABASE_URL` and `alphawatch` database are not used for these tests.
+
+With PostgreSQL running locally and the dedicated `alphawatch_test` database already created, run from the repository root:
+
+```bash
+RUN_POSTGRES_TESTS=1 \
+TEST_DATABASE_URL='postgresql+psycopg://localhost/alphawatch_test' \
+pytest -q tests/integration
+```
+
+If local PostgreSQL requires a username or password, provide them in `TEST_DATABASE_URL` (for example, `postgresql+psycopg://myuser:mypassword@localhost/alphawatch_test`). Keep credentials out of checked-in files. The fixture applies `alembic upgrade head` to the validated test database before tests and rolls each test's data transaction back afterward. It does not create or reset the database.
+
 ## API Endpoints
 
 | Method | Endpoint | Description |

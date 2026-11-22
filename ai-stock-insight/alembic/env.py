@@ -1,4 +1,5 @@
 from logging.config import fileConfig
+import os
 from pathlib import Path
 import sys
 
@@ -21,11 +22,26 @@ project_root = Path(__file__).resolve().parents[1]
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-# Import both models so their tables are registered on the shared metadata.
-from database import DATABASE_URL, Base, BacktestResult, StockAnalysis  # noqa: E402,F401
+# Import models directly so loading Alembic does not initialize the application
+# engine before an opted-in test URL has been validated.
+from database.base import Base  # noqa: E402
+from database.models import BacktestResult, StockAnalysis  # noqa: E402,F401
 
 target_metadata = Base.metadata
-config.set_main_option("sqlalchemy.url", str(DATABASE_URL).replace("%", "%%"))
+if os.getenv("RUN_POSTGRES_TESTS") == "1":
+    # Keep the validator shared with pytest, without importing its fixtures.
+    tests_root = project_root.parent / "tests"
+    if str(tests_root) not in sys.path:
+        sys.path.insert(0, str(tests_root))
+    from integration.postgres_config import validate_test_database_url  # noqa: E402
+
+    migration_url = validate_test_database_url(os.getenv("TEST_DATABASE_URL"))
+else:
+    from database.session import DATABASE_URL  # noqa: E402
+
+    migration_url = DATABASE_URL
+
+config.set_main_option("sqlalchemy.url", str(migration_url).replace("%", "%%"))
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

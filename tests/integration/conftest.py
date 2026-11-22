@@ -1,10 +1,13 @@
 """Fixtures for explicitly enabled PostgreSQL integration tests."""
 
 import os
+from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from .postgres_config import validate_opt_in
 
@@ -30,12 +33,28 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture(scope="session")
-def postgres_engine():
-    """Create an engine only for a valid, explicitly enabled run."""
+def postgres_migrated_url():
+    """Apply forward migrations to the validated dedicated test database."""
     url = validate_opt_in(_enabled(), os.getenv("TEST_DATABASE_URL"))
     if url is None:
         pytest.skip("PostgreSQL integration tests require RUN_POSTGRES_TESTS=1.")
-    engine = create_engine(url)
+    project_root = Path(__file__).resolve().parents[2] / "ai-stock-insight"
+    alembic_config = Config(str(project_root / "alembic.ini"))
+    alembic_config.set_main_option("sqlalchemy.url", str(url).replace("%", "%%"))
+    try:
+        command.upgrade(alembic_config, "head")
+    except Exception as exc:
+        raise RuntimeError(
+            "PostgreSQL integration setup could not migrate the validated alphawatch_test database. "
+            "Check that it is reachable and that its schema can be upgraded."
+        ) from exc
+    return url
+
+
+@pytest.fixture(scope="session")
+def postgres_engine(postgres_migrated_url):
+    """Create an engine only after the dedicated database is migrated."""
+    engine = create_engine(postgres_migrated_url, hide_parameters=True)
     try:
         yield engine
     finally:
@@ -48,7 +67,22 @@ def postgres_session_factory(postgres_engine):
 
 
 @pytest.fixture
-def postgres_dependency_override(postgres_session_factory):
+def postgres_session(postgres_engine):
+    """Give each test an isolated transaction that is rolled back on teardown."""
+    connection = postgres_engine.connect()
+    transaction = connection.begin()
+    session = Session(bind=connection, autoflush=False, expire_on_commit=False)
+    try:
+        yield session
+    finally:
+        session.close()
+        if transaction.is_active:
+            transaction.rollback()
+        connection.close()
+
+
+@pytest.fixture
+def postgres_dependency_override(postgres_engine):
     """Install the test session dependency and restore prior state on teardown."""
     from app.main import app
     from database.session import get_db
@@ -57,11 +91,16 @@ def postgres_dependency_override(postgres_session_factory):
     previous = app.dependency_overrides.get(get_db)
 
     def override_get_db():
-        db = postgres_session_factory()
+        connection = postgres_engine.connect()
+        transaction = connection.begin()
+        db = Session(bind=connection, autoflush=False, expire_on_commit=False)
         try:
             yield db
         finally:
             db.close()
+            if transaction.is_active:
+                transaction.rollback()
+            connection.close()
 
     app.dependency_overrides[get_db] = override_get_db
     try:
