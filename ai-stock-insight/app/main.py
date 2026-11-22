@@ -8,11 +8,12 @@ from datetime import date, datetime, timezone
 from typing import Literal
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from openai import OpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backtesting.api_schemas import BacktestRequest, BacktestResponse
@@ -106,6 +107,26 @@ class AnalysisResponse(BaseModel):
     close: float
     market_date: date = Field(description="Exchange-local trading date; not a UTC timestamp")
     retrieved_at: datetime = Field(description="UTC time this API process retrieved the data")
+
+
+class HistoricalAnalysisResponse(BaseModel):
+    id: int
+    ticker: str
+    signal: str
+    score: float
+    breakdown: dict[str, float]
+    close: float
+    market_date: date
+    retrieved_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class HistoricalAnalysisPage(BaseModel):
+    items: list[HistoricalAnalysisResponse]
+    limit: int
+    offset: int
+    total: int
 
 
 class RankingRequest(BaseModel):
@@ -215,6 +236,55 @@ def get_analysis(ticker: str, period: str = "6mo", db: Session = Depends(get_db)
         retrieved_at=result.retrieved_at,
     ))
     return result
+
+
+def _analysis_history_query(db: Session, ticker: str | None, start_date: date | None,
+                            end_date: date | None, limit: int, offset: int):
+    if start_date is not None and end_date is not None and start_date > end_date:
+        raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+    query = db.query(StockAnalysis)
+    if ticker is not None:
+        query = query.filter(StockAnalysis.ticker == validate_ticker(ticker))
+    if start_date is not None:
+        query = query.filter(StockAnalysis.market_date >= start_date)
+    if end_date is not None:
+        query = query.filter(StockAnalysis.market_date <= end_date)
+    total = query.with_entities(func.count(StockAnalysis.id)).scalar()
+    rows = (query.order_by(
+        StockAnalysis.market_date.desc(),
+        StockAnalysis.retrieved_at.desc(),
+        StockAnalysis.id.desc(),
+    ).offset(offset).limit(limit).all())
+    return HistoricalAnalysisPage(
+        items=[HistoricalAnalysisResponse.model_validate(row) for row in rows],
+        limit=limit,
+        offset=offset,
+        total=total or 0,
+    )
+
+
+@app.get("/history/analyses", response_model=HistoricalAnalysisPage)
+def get_analysis_history(
+    ticker: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return _analysis_history_query(db, ticker, start_date, end_date, limit, offset)
+
+
+@app.get("/history/analyses/{ticker}", response_model=HistoricalAnalysisPage)
+def get_ticker_analysis_history(
+    ticker: str,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return _analysis_history_query(db, ticker, start_date, end_date, limit, offset)
 
 
 @app.post("/ranking", response_model=RankingResponse, responses={
