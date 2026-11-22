@@ -8,15 +8,18 @@ from datetime import date, datetime, timezone
 from typing import Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from openai import OpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from backtesting.api_schemas import BacktestRequest, BacktestResponse
 from backtesting.config import BacktestConfig, StrategyRules
 from backtesting.engine import run_backtest
+from database.models import BacktestResult, StockAnalysis
+from database.session import get_db
 from signals.strategy import ScoreWeights
 from signals.indicators import IndicatorWindows
 from data.errors import (
@@ -60,6 +63,24 @@ if not any(getattr(handler, "_alphawatch_json", False) for handler in base_logge
     stream_handler._alphawatch_json = True
     base_logger.addHandler(stream_handler)
 logger = logging.getLogger("alphawatch.api")
+
+
+class PersistenceFailure(Exception):
+    """A result could not be retained after successful calculation."""
+
+
+def _persist(db: Session, record) -> None:
+    try:
+        db.add(record)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.error(
+            "Database persistence failed",
+            extra={"operation": "database_persistence", "error_type": type(exc).__name__},
+            exc_info=True,
+        )
+        raise PersistenceFailure() from exc
 
 app = FastAPI(title="AlphaWatch API", version="1.1.0", description="Point-in-time technical stock analysis API")
 
@@ -127,6 +148,11 @@ async def domain_exception_handler(request: Request, exc: AlphaWatchError):
     return JSONResponse(status_code=exc.status_code, content={"error": {"code": exc.code, "message": exc.public_message}})
 
 
+@app.exception_handler(PersistenceFailure)
+async def persistence_exception_handler(request: Request, exc: PersistenceFailure):
+    return JSONResponse(status_code=500, content={"error": {"code": "internal_error", "message": "Internal server error."}})
+
+
 @app.exception_handler(RequestValidationError)
 async def request_validation_handler(request: Request, exc: RequestValidationError):
     logger.info("API request validation failed", extra={"operation": "http_request", "endpoint": request.url.path})
@@ -181,15 +207,21 @@ def health():
     404: {"model": ErrorResponse}, 422: {"model": ErrorResponse},
     502: {"model": ErrorResponse}, 500: {"model": ErrorResponse},
 })
-def get_analysis(ticker: str, period: str = "6mo"):
-    return analyze(ticker, period)
+def get_analysis(ticker: str, period: str = "6mo", db: Session = Depends(get_db)):
+    result = analyze(ticker, period)
+    _persist(db, StockAnalysis(
+        ticker=result.ticker, signal=result.signal, score=result.score,
+        breakdown=result.breakdown, close=result.close, market_date=result.market_date,
+        retrieved_at=result.retrieved_at,
+    ))
+    return result
 
 
 @app.post("/ranking", response_model=RankingResponse, responses={
     404: {"model": ErrorResponse}, 422: {"model": ErrorResponse},
     502: {"model": ErrorResponse}, 500: {"model": ErrorResponse},
 })
-def ranking(request: RankingRequest):
+def ranking(request: RankingRequest, db: Session = Depends(get_db)):
     tickers = [validate_ticker(item) for item in request.tickers]
     data, fetch_errors = fetch_many(tickers, period=request.period)
     ranked, errors = [], {}
@@ -208,7 +240,13 @@ def ranking(request: RankingRequest):
             market_date = row["Date"]
             if isinstance(market_date, datetime):
                 market_date = market_date.date()
-            ranked.append(RankingItem(ticker=ticker, score=float(row["Score"]), signal=generate_signal_label(row["Score"]), market_date=market_date))
+            item = RankingItem(ticker=ticker, score=float(row["Score"]), signal=generate_signal_label(row["Score"]), market_date=market_date)
+            ranked.append(item)
+            _persist(db, StockAnalysis(
+                ticker=ticker, signal=item.signal, score=item.score,
+                breakdown=row["ScoreBreakdown"], close=float(row["Close"]),
+                market_date=item.market_date, retrieved_at=datetime.now(timezone.utc),
+            ))
         except InsufficientDataError as exc:
             errors[ticker] = ErrorDetail(code=exc.code, message=exc.public_message)
     if not ranked and errors:
@@ -226,7 +264,7 @@ def ranking(request: RankingRequest):
     404: {"model": ErrorResponse}, 422: {"model": ErrorResponse},
     502: {"model": ErrorResponse}, 500: {"model": ErrorResponse},
 })
-def backtest(request: BacktestRequest):
+def backtest(request: BacktestRequest, db: Session = Depends(get_db)):
     ticker = validate_ticker(request.ticker)
     try:
         config = BacktestConfig(
@@ -249,7 +287,32 @@ def backtest(request: BacktestRequest):
         )
     except ValueError as exc:
         raise InvalidRequestError() from exc
-    return run_backtest(config)
+    result = run_backtest(config)
+    response = BacktestResponse.model_validate(result)
+    # Round-trip Pydantic's JSON representation so NaN/Infinity become JSON nulls
+    # and nested date values are safe for PostgreSQL JSON/JSONB serialization.
+    payload = json.loads(response.model_dump_json())
+    metrics = response.metrics
+    benchmark = response.benchmark
+    _persist(db, BacktestResult(
+        ticker=response.ticker,
+        requested_start_date=request.start_date,
+        requested_end_date=request.end_date,
+        evaluation_start_date=response.evaluation_period.start_date,
+        evaluation_end_date=response.evaluation_period.end_date,
+        initial_capital=metrics.initial_capital,
+        final_portfolio_value=metrics.final_portfolio_value,
+        total_return=metrics.total_return,
+        annualized_return=metrics.annualized_return,
+        maximum_drawdown=metrics.maximum_drawdown,
+        sharpe_ratio=metrics.sharpe_ratio,
+        benchmark_return=benchmark.benchmark_total_return,
+        benchmark_annualized_return=benchmark.benchmark_annualized_return,
+        benchmark_maximum_drawdown=benchmark.benchmark_maximum_drawdown,
+        strategy_configuration=payload["configuration"],
+        results=payload,
+    ))
+    return response
 
 
 def run(ticker):
