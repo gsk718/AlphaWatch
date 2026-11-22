@@ -146,10 +146,14 @@ The API will be available at:
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/health` | API health check |
+| GET | `/health` | Liveness check; returns `{"status":"ok"}` when the application is running |
+| GET | `/health/live` | Liveness check; returns `{"status":"ok"}` without accessing the database |
+| GET | `/health/ready` | Database readiness check; returns 503 when the database is unavailable |
 | GET | `/analysis/{ticker}` | Technical analysis for an individual ticker |
 | POST | `/ranking` | Analyze and rank multiple tickers |
 | POST | `/backtest` | Run a historical trading strategy simulation |
+
+`/health` and `/health/live` report application liveness and do not check database connectivity. `/health/ready` checks the database connection and returns HTTP 503 when it is unavailable. Configure deployment systems to use readiness to determine whether an instance can receive traffic; liveness should only determine whether the application process is running.
 
 ### Example Requests
 

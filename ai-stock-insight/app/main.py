@@ -13,7 +13,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from openai import OpenAI
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import func, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from backtesting.api_schemas import BacktestRequest, BacktestResponse
@@ -250,6 +251,27 @@ def analyze(ticker: str, period: str = "6mo") -> AnalysisResponse:
 @app.get("/health", response_model=HealthResponse, responses={500: {"model": ErrorResponse}})
 def health():
     return HealthResponse(status="ok")
+
+
+@app.get("/health/live", response_model=HealthResponse)
+def health_live():
+    """Report that the application process is running."""
+    return HealthResponse(status="ok")
+
+
+@app.get("/health/ready")
+def health_ready(db: Session = Depends(get_db)):
+    """Report whether the application can reach its database."""
+    try:
+        db.execute(text("SELECT 1"))
+    except SQLAlchemyError as exc:
+        logger.error(
+            "Database readiness check failed",
+            extra={"operation": "database_readiness", "error_type": type(exc).__name__},
+            exc_info=True,
+        )
+        return JSONResponse(status_code=503, content={"status": "unavailable"})
+    return {"status": "ok"}
 
 
 @app.get("/analysis/{ticker}", response_model=AnalysisResponse, responses={
