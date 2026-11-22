@@ -2,21 +2,23 @@
 
 **A Python-based stock research and historical backtesting platform built with FastAPI.**
 
-AlphaWatch combines deterministic technical analysis, configurable signal scoring, and historical portfolio simulation to evaluate stock trading strategies using market data.
+AlphaWatch combines technical analysis, configurable signal scoring, and historical portfolio simulation to evaluate stock trading strategies using market data.
 
-The project focuses on backend engineering, including modular architecture, API design, input validation, concurrent data retrieval, error handling, and automated testing.
+The project focuses on backend engineering, including modular architecture, REST API design, input validation, concurrent data retrieval, error handling, portfolio simulation, and automated testing.
 
 ## Features
 
 ### Technical Analysis & Signal Generation
+
 - Calculates moving averages, RSI, momentum, and volatility.
 - Generates configurable weighted scores from technical indicators.
 - Classifies signals as Buy, Sell, Strong Buy, Strong Sell, or Hold.
 - Returns indicator-level contribution breakdowns for signal transparency.
-- Supports analysis of individual stocks and multi-ticker rankings.
+- Supports individual stock analysis and multi-ticker rankings.
 
 ### REST API
-- FastAPI endpoints for health checks, stock analysis, and ticker rankings.
+
+- FastAPI endpoints for health checks, stock analysis, ticker rankings, and historical backtesting.
 - Request validation and normalized ticker inputs.
 - Bounded concurrent market-data retrieval.
 - Retry logic with exponential backoff and jitter.
@@ -24,18 +26,23 @@ The project focuses on backend engineering, including modular architecture, API 
 - Interactive API documentation through OpenAPI and Swagger UI.
 
 ### Historical Backtesting
+
 - Simulates long-only trading strategies using historical OHLC data.
 - Executes signals on the next eligible trading session rather than the signal day's closing price.
 - Supports configurable position sizing, commissions, and slippage.
+- Supports fractional-share and whole-share execution.
 - Tracks portfolio cash, shares, equity, and completed trades.
-- Calculates performance metrics and compares strategy performance against the S&P 500 benchmark (SPY).
-- Reports signal coverage, warm-up requirements, and benchmark alignment.
+- Calculates portfolio performance metrics.
+- Compares strategy performance against the S&P 500 benchmark (SPY).
+- Reports signal coverage, warm-up requirements, and benchmark date alignment.
 
 ### Performance Metrics
+
 - Total and annualized returns.
 - Annualized volatility and Sharpe ratio.
 - Maximum drawdown and downside deviation.
-- Trade win rate, average winning and losing trade P/L, and profit factor.
+- Trade win rate and average winning and losing trade P/L.
+- Profit factor and average holding period.
 - Strategy and benchmark equity curves.
 
 ## Tech Stack
@@ -89,6 +96,7 @@ AlphaWatch separates data retrieval, indicator calculations, signal scoring, API
 ## Getting Started
 
 ### Prerequisites
+
 - Python 3.10+
 - pip
 - An internet connection for market-data retrieval
@@ -145,13 +153,33 @@ The API will be available at:
 
 ### Example Requests
 
-Retrieve analysis for Apple:
+**Retrieve technical analysis for Apple:**
 
 ```bash
 curl http://127.0.0.1:8000/analysis/AAPL
 ```
 
-Rank multiple stocks:
+Example response:
+
+```json
+{
+  "ticker": "AAPL",
+  "signal": "Strong Buy",
+  "score": 2.0,
+  "breakdown": {
+    "trend": 1.0,
+    "rsi": 0.0,
+    "momentum": 1.0
+  },
+  "close": 342.55999755859375,
+  "market_date": "2026-11-20",
+  "retrieved_at": "2026-11-22T19:45:42.919349Z"
+}
+```
+
+*Sample output from a live API request. Market data and signals change over time.*
+
+**Rank multiple stocks:**
 
 ```bash
 curl -X POST http://127.0.0.1:8000/ranking \
@@ -159,7 +187,7 @@ curl -X POST http://127.0.0.1:8000/ranking \
   -d '{"tickers":["AAPL","MSFT"],"period":"6mo"}'
 ```
 
-Run a historical backtest:
+**Run a historical backtest:**
 
 ```bash
 curl -X POST http://127.0.0.1:8000/backtest \
@@ -174,23 +202,76 @@ curl -X POST http://127.0.0.1:8000/backtest \
   }'
 ```
 
+Example backtest response summary:
+
+```json
+{
+  "evaluation_period": {
+    "start_date": "2021-01-04",
+    "end_date": "2025-12-31"
+  },
+  "signal_coverage": {
+    "evaluation_trading_dates": 1255,
+    "valid_signal_dates": 1255,
+    "missing_signal_dates": [],
+    "warmup_status": "complete",
+    "first_valid_signal_date": "2021-01-04"
+  },
+  "metrics": {
+    "initial_capital": 10000.0,
+    "final_portfolio_value": 14472.94,
+    "total_return": 0.4473,
+    "annualized_return": 0.0771,
+    "maximum_drawdown": -0.3065,
+    "annualized_volatility": 0.1855,
+    "sharpe_ratio": 0.4934,
+    "completed_trades": 35,
+    "winning_trades": 13,
+    "losing_trades": 22,
+    "win_rate": 0.3714,
+    "profit_factor": 1.3791
+  },
+  "benchmark": {
+    "benchmark_symbol": "SPY",
+    "strategy_total_return": 0.4473,
+    "benchmark_total_return": 0.8491,
+    "strategy_annualized_return": 0.0771,
+    "benchmark_annualized_return": 0.1315,
+    "strategy_maximum_drawdown": -0.3065,
+    "benchmark_maximum_drawdown": -0.2536
+  }
+}
+```
+
+The backtesting engine returns a detailed response containing configuration, evaluation period, signal coverage, performance metrics, benchmark data, equity curves, trade history, and individual trading signals.
+
+*Sample output from a five-year AAPL backtest using $10,000 initial capital. Results are historical simulations, not predictions.*
+
 ## Backtesting Methodology
 
 The backtesting engine uses AlphaWatch's existing indicator and scoring functions to generate historical trading signals.
 
-The default strategy:
+### Default Strategy
+
 - Enters a position on Buy or Strong Buy signals.
 - Exits a position on Sell or Strong Sell signals.
 - Holds the existing position or remains in cash on Hold signals.
 - Does not use short selling.
 
-Signals generated from a trading session's closing data are eligible for execution on the next available trading session. The engine uses the next session's Open price when valid, otherwise it falls back to that session's Close and records the fallback.
+Signals generated from a trading session's closing data are eligible for execution on the next available trading session. The engine uses the next session's Open price when valid, otherwise falling back to that session's Close and recording the fallback.
 
-Portfolio equity is calculated from available cash and the market value of open positions. Positions are marked to market at each session's closing price. Open positions are not automatically liquidated at the end of a backtest.
+### Portfolio Accounting
+
+Portfolio equity is calculated from available cash and the market value of open positions.
+
+- Positions are marked to market at each session's closing price.
+- Open positions are not automatically liquidated at the end of a backtest.
+- Completed-trade statistics exclude positions that remain open.
 
 ### Transaction Costs
 
 The simulation accounts for:
+
 - Commission on buy and sell transactions.
 - Slippage applied to execution prices.
 - Configurable position sizing.
@@ -209,6 +290,7 @@ Benchmark returns use unadjusted closing prices (`auto_adjust=False`), so divide
 - Incomplete benchmark date alignment is rejected rather than treated as daily data.
 - Indicator warm-up observations are excluded from the evaluation period.
 - Missing trading sessions are not synthesized.
+- Annualized returns require at least two daily return observations.
 
 Backtested results are simulations based on historical data and documented assumptions. They do not guarantee future performance and are not investment recommendations.
 
@@ -246,6 +328,7 @@ Market data is mocked during testing, so live market-data access and OpenAI cred
 AlphaWatch is an actively developed research prototype.
 
 The current implementation does not include:
+
 - Persistent database storage.
 - User authentication or account management.
 - Fundamental financial statement analysis.
@@ -253,4 +336,3 @@ The current implementation does not include:
 - A web-based frontend.
 
 The market-data integration uses yfinance for prototyping. Provider terms and data licensing should be reviewed before production use.
-
