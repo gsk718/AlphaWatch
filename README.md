@@ -329,6 +329,8 @@ pytest -q
 
 Market data is mocked during testing, so live market-data access and OpenAI credentials are not required.
 
+PostgreSQL integration tests are opt-in and require an explicitly configured, dedicated `alphawatch_test` database. Setup instructions will be added in a later phase.
+
 ## Current Scope & Limitations
 
 AlphaWatch is an actively developed research prototype.
