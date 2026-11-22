@@ -41,7 +41,10 @@ else:
 
     migration_url = DATABASE_URL
 
-config.set_main_option("sqlalchemy.url", str(migration_url).replace("%", "%%"))
+config.set_main_option(
+    "sqlalchemy.url",
+    migration_url.render_as_string(hide_password=False).replace("%", "%%"),
+)
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

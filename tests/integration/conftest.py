@@ -40,7 +40,10 @@ def postgres_migrated_url():
         pytest.skip("PostgreSQL integration tests require RUN_POSTGRES_TESTS=1.")
     project_root = Path(__file__).resolve().parents[2] / "ai-stock-insight"
     alembic_config = Config(str(project_root / "alembic.ini"))
-    alembic_config.set_main_option("sqlalchemy.url", str(url).replace("%", "%%"))
+    alembic_config.set_main_option(
+        "sqlalchemy.url",
+        url.render_as_string(hide_password=False).replace("%", "%%"),
+    )
     try:
         command.upgrade(alembic_config, "head")
     except Exception as exc:
