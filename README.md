@@ -58,7 +58,7 @@ AlphaWatch separates data retrieval, indicator calculations, signal scoring, API
                   Client / CLI
                        |
                        v
-                  FastAPI
+                    FastAPI
                        |
           +------------+------------+
           |            |            |
@@ -67,23 +67,23 @@ AlphaWatch separates data retrieval, indicator calculations, signal scoring, API
           +------------+------------+
                        |
                        v
-                Data Fetcher
+                  Data Fetcher
                        |
                        v
               Technical Indicators
                        |
                        v
-               Signal Scoring
+                Signal Scoring
                        |
              +---------+---------+
              |                   |
         API Response       Portfolio Engine
-                                 |
-                                 v
-                         Performance Metrics
-                                 |
-                                 v
-                          SPY Benchmark
+                                   |
+                                   v
+                           Performance Metrics
+                                   |
+                                   v
+                              SPY Benchmark
 ```
 
 ## Getting Started
@@ -254,6 +254,3 @@ The current implementation does not include:
 
 The market-data integration uses yfinance for prototyping. Provider terms and data licensing should be reviewed before production use.
 
-## Disclaimer
-
-AlphaWatch is an educational stock research and backtesting project. Technical signals and historical simulations are not financial advice, investment recommendations, or guarantees of future returns.
