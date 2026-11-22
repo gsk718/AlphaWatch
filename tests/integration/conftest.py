@@ -71,7 +71,12 @@ def postgres_session(postgres_engine):
     """Give each test an isolated transaction that is rolled back on teardown."""
     connection = postgres_engine.connect()
     transaction = connection.begin()
-    session = Session(bind=connection, autoflush=False, expire_on_commit=False)
+    session = Session(
+        bind=connection,
+        autoflush=False,
+        expire_on_commit=False,
+        join_transaction_mode="create_savepoint",
+    )
     try:
         yield session
     finally:
@@ -83,24 +88,29 @@ def postgres_session(postgres_engine):
 
 @pytest.fixture
 def postgres_dependency_override(postgres_engine):
-    """Install the test session dependency and restore prior state on teardown."""
+    """Share one rollbackable test transaction across HTTP request sessions."""
     from app.main import app
     from database.session import get_db
 
     had_previous = get_db in app.dependency_overrides
     previous = app.dependency_overrides.get(get_db)
 
+    connection = postgres_engine.connect()
+    transaction = connection.begin()
+
     def override_get_db():
-        connection = postgres_engine.connect()
-        transaction = connection.begin()
-        db = Session(bind=connection, autoflush=False, expire_on_commit=False)
+        # Session.commit() flushes its work but leaves this externally managed
+        # transaction open, making it visible to the next request on connection.
+        db = Session(
+            bind=connection,
+            autoflush=False,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
+        )
         try:
             yield db
         finally:
             db.close()
-            if transaction.is_active:
-                transaction.rollback()
-            connection.close()
 
     app.dependency_overrides[get_db] = override_get_db
     try:
@@ -110,3 +120,6 @@ def postgres_dependency_override(postgres_engine):
             app.dependency_overrides[get_db] = previous
         else:
             app.dependency_overrides.pop(get_db, None)
+        if transaction.is_active:
+            transaction.rollback()
+        connection.close()

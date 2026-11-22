@@ -114,3 +114,54 @@ def test_api_dependency_commit_is_rolled_back_on_teardown(postgres_dependency_ov
 
     with Session(postgres_engine) as check_session:
         assert check_session.query(StockAnalysis).filter_by(ticker=ticker).first() is None
+
+
+def test_request_session_rollback_preserves_outer_transaction_and_prior_commit(postgres_dependency_override):
+    from database.session import get_db
+    from sqlalchemy import text
+
+    ticker = f"T{uuid4().hex[:10].upper()}"
+    override = postgres_dependency_override.dependency_overrides[get_db]
+
+    first_request = override()
+    first_db = next(first_request)
+    first_db.add(
+        StockAnalysis(
+            ticker=ticker,
+            signal="Buy",
+            score=1.0,
+            breakdown={"source": "first request"},
+            close=100.0,
+            market_date=date(2025, 7, 8),
+            retrieved_at=datetime(2025, 7, 8, tzinfo=timezone.utc),
+        )
+    )
+    first_db.commit()
+    first_request.close()
+
+    rollback_request = override()
+    rollback_db = next(rollback_request)
+    rollback_db.add(
+        StockAnalysis(
+            ticker=f"T{uuid4().hex[:10].upper()}",
+            signal="Sell",
+            score=0.0,
+            breakdown={"source": "rolled back request"},
+            close=90.0,
+            market_date=date(2025, 7, 9),
+            retrieved_at=datetime(2025, 7, 9, tzinfo=timezone.utc),
+        )
+    )
+    rollback_db.flush()
+    rollback_db.rollback()
+    rollback_request.close()
+
+    subsequent_request = override()
+    subsequent_db = next(subsequent_request)
+    try:
+        assert subsequent_db.query(StockAnalysis).filter_by(ticker=ticker).one().breakdown == {
+            "source": "first request"
+        }
+        assert subsequent_db.execute(text("SELECT 1")).scalar_one() == 1
+    finally:
+        subsequent_request.close()
