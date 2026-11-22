@@ -1,0 +1,9 @@
+yfinance
+pandas
+plotly
+openai
+python-dotenv
+fastapi
+uvicorn[standard]
+pytest
+httpx
