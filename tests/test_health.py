@@ -1,8 +1,31 @@
+import pytest
 from sqlalchemy.exc import OperationalError
 from fastapi.testclient import TestClient
 
 from app import main
 from database.session import get_db
+
+
+def test_cors_origins_include_local_and_configured_origins(monkeypatch):
+    monkeypatch.setenv(
+        "CORS_ORIGINS",
+        " https://alphawatch.gauravdevport.com, https://preview.example.com ",
+    )
+
+    assert main._cors_origins() == [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://alphawatch.gauravdevport.com",
+        "https://preview.example.com",
+    ]
+
+
+@pytest.mark.parametrize("configured", ["*", "https://*.example.com"])
+def test_cors_origins_reject_wildcard(monkeypatch, configured):
+    monkeypatch.setenv("CORS_ORIGINS", configured)
+
+    with pytest.raises(ValueError, match="wildcard origins are not allowed"):
+        main._cors_origins()
 
 
 def _with_db_override(override):

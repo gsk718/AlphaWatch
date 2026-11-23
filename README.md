@@ -1,8 +1,8 @@
 # AlphaWatch
 
-**A Python-based stock research and historical backtesting platform built with FastAPI.**
+**A full-stack stock research and historical backtesting platform built with FastAPI and React.**
 
-AlphaWatch combines technical analysis, configurable signal scoring, and historical portfolio simulation to evaluate stock trading strategies using market data.
+AlphaWatch combines a browser dashboard with the existing API for technical analysis, signal ranking, and historical portfolio simulation.
 
 The project focuses on backend engineering, including modular architecture, REST API design, input validation, concurrent data retrieval, error handling, portfolio simulation, and automated testing.
 
@@ -56,13 +56,15 @@ The project focuses on backend engineering, including modular architecture, REST
 | Pydantic | Request validation and response schemas |
 | OpenAI API | Optional AI-generated commentary in the CLI |
 | Pytest | Automated testing |
+| React, TypeScript, Vite | Browser dashboard |
+| Recharts, Tailwind CSS, Lucide | Financial charts, styling, and iconography |
 
 ## Architecture
 
 AlphaWatch separates data retrieval, indicator calculations, signal scoring, API handling, and backtesting into modular components.
 
 ```text
-                  Client / CLI
+               React Dashboard / CLI
                        |
                        v
                     FastAPI
@@ -99,6 +101,7 @@ AlphaWatch separates data retrieval, indicator calculations, signal scoring, API
 
 - Python 3.10+
 - pip
+- PostgreSQL (required for the API's persistent database)
 - An internet connection for market-data retrieval
 
 ### Installation
@@ -117,15 +120,46 @@ python -m venv .venv
 source .venv/bin/activate
 ```
 
-Install dependencies:
+From the repository root, install dependencies:
 
 ```bash
 pip install -r ai-stock-insight/requirements.txt
 ```
 
+The nested `ai-stock-insight/requirements.txt` contains the FastAPI application's dependencies, including SQLAlchemy, Psycopg 3, and Alembic. The root `requirements.txt` is a separate, pinned dependency list for the repository-root scripts; it does not replace the application's requirements file.
+
+### Configure PostgreSQL
+
+Start PostgreSQL, then, if a local development database named `alphawatch` does not already exist, create it (for example, using the PostgreSQL command-line utility):
+
+```bash
+createdb alphawatch
+```
+
+The application reads its `.env` file from `ai-stock-insight/.env`, alongside `alembic.ini`. The checked-in `.env.example` is at the repository root; from the repository root, copy it into the application directory and edit it there:
+
+```bash
+cp .env.example ai-stock-insight/.env
+```
+
+Set `DATABASE_URL` in `ai-stock-insight/.env` to a PostgreSQL URL for the `alphawatch` database. For a local PostgreSQL role that can connect over TCP, use this shape and replace the placeholders with your local role and password:
+
+```env
+DATABASE_URL=postgresql+psycopg://<username>:<password>@localhost:5432/alphawatch
+```
+
+Do not commit local credentials. If PostgreSQL is configured for local Unix-socket authentication under the current OS user, the application default is `postgresql+psycopg:///alphawatch`; in that case `DATABASE_URL` can be omitted.
+
+Apply the schema migrations from the application directory:
+
+```bash
+cd ai-stock-insight
+alembic upgrade head
+```
+
 ### Run the API
 
-Navigate to the application directory:
+If you have not already changed directories for migrations, navigate to the application directory:
 
 ```bash
 cd ai-stock-insight
@@ -141,6 +175,30 @@ The API will be available at:
 
 - API: http://127.0.0.1:8000
 - Interactive Swagger documentation: http://127.0.0.1:8000/docs
+
+The command assumes the virtual environment created above is active. Stop the server with Ctrl+C.
+
+### Run the dashboard
+
+In another terminal, from the repository root:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The dashboard runs at http://localhost:5173 and uses `http://127.0.0.1:8000` by default. To use another API URL, create `frontend/.env.local` (do not overwrite any existing env file) with:
+
+```env
+VITE_API_URL=http://127.0.0.1:8000
+```
+
+Start the API and dashboard in separate terminals. The API allows the local Vite origins on port 5173 for browser requests. The frontend build can be checked with `npm run build` from `frontend/`.
+
+### Dashboard functionality
+
+The dashboard includes an overview, single-stock analysis, multi-ticker rankings, configurable backtesting with strategy and benchmark equity curves, analysis history, and backtest history with detailed inspection. The API's current analysis response contains only the latest close and indicator breakdown, not a historical price series or AI commentary; the dashboard does not fabricate either. Historical activity requires the configured PostgreSQL database.
 
 ### PostgreSQL integration tests
 
@@ -160,110 +218,63 @@ If local PostgreSQL requires a username or password, provide them in `TEST_DATAB
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/health` | Liveness check; returns `{"status":"ok"}` when the application is running |
-| GET | `/health/live` | Liveness check; returns `{"status":"ok"}` without accessing the database |
-| GET | `/health/ready` | Database readiness check; returns 503 when the database is unavailable |
-| GET | `/analysis/{ticker}` | Technical analysis for an individual ticker |
-| POST | `/ranking` | Analyze and rank multiple tickers |
-| POST | `/backtest` | Run a historical trading strategy simulation |
+| GET | `/health` | Basic process health |
+| GET | `/health/live` | Liveness probe; no database access |
+| GET | `/health/ready` | Database readiness probe |
+| GET | `/analysis/{ticker}` | Calculate and persist a ticker's latest technical analysis |
+| POST | `/ranking` | Analyze, rank, and persist successful ticker results |
+| POST | `/backtest` | Run and persist a historical strategy simulation |
+| GET | `/history/analyses` | List saved analyses with optional ticker/date filters |
+| GET | `/history/analyses/{ticker}` | List saved analyses for one ticker with optional date filters |
+| GET | `/history/backtests` | List saved backtest summaries, optionally filtered by ticker |
+| GET | `/history/backtests/{backtest_id}` | Retrieve a complete saved backtest by ID |
 
-`/health` and `/health/live` report application liveness and do not check database connectivity. `/health/ready` checks the database connection and returns HTTP 503 when it is unavailable. Configure deployment systems to use readiness to determine whether an instance can receive traffic; liveness should only determine whether the application process is running.
+Interactive OpenAPI documentation is available at `/docs` (for example, `http://127.0.0.1:8000/docs`). Examples use illustrative tickers and dates; market data and returned values change over time.
 
-### Example Requests
+`/health` and `/health/live` return `{"status":"ok"}` without checking the database. `/health/ready` runs `SELECT 1`; it returns `{"status":"ok"}` on success and HTTP 503 with `{"status":"unavailable"}` if the database cannot be reached.
 
-**Retrieve technical analysis for Apple:**
+### Request and response reference
 
-```bash
-curl http://127.0.0.1:8000/analysis/AAPL
-```
+- **GET `/analysis/{ticker}`** — Path parameter `ticker` is trimmed, uppercased, and must match `[A-Z0-9][A-Z0-9.\-^=]{0,14}` after normalization; optional query `period` defaults to `6mo` and must be `1mo`, `3mo`, `6mo`, `1y`, `2y`, `5y`, `10y`, `ytd`, or `max`. Response: `{ticker, signal, score, breakdown, close, market_date, retrieved_at}`. `market_date` is an exchange-local date; `retrieved_at` is UTC.
+- **POST `/ranking`** — JSON body: required `tickers` list (1–50 strings); optional `period` with the choices above, default `6mo`. Response: `{results:[{ticker,score,signal,market_date}], errors:{ticker:{code,message}}, retrieved_at}`. Partial per-ticker failures can accompany successful results. Results sort by descending score, then ticker.
+- **POST `/backtest`** — JSON body requires `ticker` (trimmed and uppercased; must follow the same syntax as tickers accepted by the other endpoints: `[A-Z0-9][A-Z0-9.\-^=]{0,14}` after normalization), `start_date`, `end_date` (ISO dates; start must precede end and end cannot be future). Optional fields/defaults: `initial_capital` 10000 (>0); `commission_rate` and `slippage_rate` 0.001 (each >=0 and <1); `position_size_fraction` 1.0 (>0 and <=1); `fractional_shares` true; `trend_weight`, `rsi_weight`, `momentum_weight` each 1.0 (>=0, finite, and at least one must be positive); `ma_short_window` 5 (>=1 and less than long window); `ma_long_window` 20 (>=2); `rsi_period` 14 and `momentum_period` 10 (each >=1); `entry_signals` defaults to `["Buy","Strong Buy"]`, `exit_signals` to `["Sell","Strong Sell"]`. Both signal lists must be nonempty, use `Strong Buy`, `Buy`, `Hold`, `Sell`, or `Strong Sell`, exclude `Hold`, and have no overlap. Unknown body fields are rejected. Response top-level fields: `ticker`, `configuration`, `evaluation_period`, `signal_coverage`, `metrics`, `benchmark`, `equity_curve`, `benchmark_equity_curve`, `trades`, `signals`, `retrieved_at`, `metric_assumptions`; `/docs` shows nested fields.
+- **GET `/history/analyses`** — Optional query `ticker` (same normalization/syntax), `start_date`, `end_date`; date bounds are ISO `YYYY-MM-DD`, inclusive on `market_date`, and start must be on or before end. `limit` defaults to 20 (1–100); `offset` defaults to 0 (>=0). Response: `{items:[{id,ticker,signal,score,breakdown,close,market_date,retrieved_at}],limit,offset,total}`. Items sort newest market date and retrieval first.
+- **GET `/history/analyses/{ticker}`** — Path ticker plus the same inclusive date filters and pagination as the collection route; response has the same page shape.
+- **GET `/history/backtests`** — Optional query `ticker` (same normalization/syntax); `limit` defaults to 20 (1–100), `offset` defaults to 0 (>=0). No date filters are implemented. Response: `{items,limit,offset,total}`. Each item contains `id`, `ticker`, `requested_start_date`, `requested_end_date`, `evaluation_start_date`, `evaluation_end_date`, `initial_capital`, `final_portfolio_value`, `total_return`, nullable `annualized_return`, `maximum_drawdown`, nullable `sharpe_ratio`, `benchmark_return`, nullable `benchmark_annualized_return`, `benchmark_maximum_drawdown`, and `created_at`; newest first.
+- **GET `/history/backtests/{backtest_id}`** — Integer path parameter `backtest_id`; returns the complete backtest response shape described above.
 
-Example response:
+Successful analyses and successful ranking items are stored when calculated. Backtests store summary columns for listing and the full response JSON for detail retrieval. History endpoints read these records from the configured database. Analysis date filters apply inclusively to `market_date`; pagination is limit/offset based.
 
-```json
-{
-  "ticker": "AAPL",
-  "signal": "Strong Buy",
-  "score": 2.0,
-  "breakdown": {
-    "trend": 1.0,
-    "rsi": 0.0,
-    "momentum": 1.0
-  },
-  "close": 342.55999755859375,
-  "market_date": "2026-11-20",
-  "retrieved_at": "2026-11-22T19:45:42.919349Z"
-}
-```
-
-*Sample output from a live API request. Market data and signals change over time.*
-
-**Rank multiple stocks:**
+### Representative requests
 
 ```bash
-curl -X POST http://127.0.0.1:8000/ranking \
-  -H 'Content-Type: application/json' \
+# Single-stock analysis
+curl 'http://127.0.0.1:8000/analysis/AAPL?period=1y'
+
+# Stock ranking
+curl -X POST http://127.0.0.1:8000/ranking -H 'Content-Type: application/json' \
   -d '{"tickers":["AAPL","MSFT"],"period":"6mo"}'
+
+# Backtesting (other request fields use their documented defaults)
+curl -X POST http://127.0.0.1:8000/backtest -H 'Content-Type: application/json' \
+  -d '{"ticker":"AAPL","start_date":"2022-01-01","end_date":"2025-12-31"}'
+
+# List historical analyses with inclusive date filtering and pagination
+curl 'http://127.0.0.1:8000/history/analyses?ticker=AAPL&start_date=2025-01-01&end_date=2025-12-31&limit=20&offset=0'
+
+# Retrieve historical analyses for a ticker
+curl 'http://127.0.0.1:8000/history/analyses/AAPL?limit=10&offset=0'
+
+# List historical backtest summaries
+curl 'http://127.0.0.1:8000/history/backtests?ticker=AAPL&limit=20&offset=0'
+
+# Retrieve a full backtest (replace 42 with an ID from the list)
+curl 'http://127.0.0.1:8000/history/backtests/42'
 ```
 
-**Run a historical backtest:**
+### HTTP errors
 
-```bash
-curl -X POST http://127.0.0.1:8000/backtest \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "ticker": "AAPL",
-    "start_date": "2021-01-01",
-    "end_date": "2026-01-01",
-    "initial_capital": 10000,
-    "commission_rate": 0.001,
-    "slippage_rate": 0.001
-  }'
-```
-
-Example backtest response summary:
-
-```json
-{
-  "evaluation_period": {
-    "start_date": "2021-01-04",
-    "end_date": "2025-12-31"
-  },
-  "signal_coverage": {
-    "evaluation_trading_dates": 1255,
-    "valid_signal_dates": 1255,
-    "missing_signal_dates": [],
-    "warmup_status": "complete",
-    "first_valid_signal_date": "2021-01-04"
-  },
-  "metrics": {
-    "initial_capital": 10000.0,
-    "final_portfolio_value": 14472.94,
-    "total_return": 0.4473,
-    "annualized_return": 0.0771,
-    "maximum_drawdown": -0.3065,
-    "annualized_volatility": 0.1855,
-    "sharpe_ratio": 0.4934,
-    "completed_trades": 35,
-    "winning_trades": 13,
-    "losing_trades": 22,
-    "win_rate": 0.3714,
-    "profit_factor": 1.3791
-  },
-  "benchmark": {
-    "benchmark_symbol": "SPY",
-    "strategy_total_return": 0.4473,
-    "benchmark_total_return": 0.8491,
-    "strategy_annualized_return": 0.0771,
-    "benchmark_annualized_return": 0.1315,
-    "strategy_maximum_drawdown": -0.3065,
-    "benchmark_maximum_drawdown": -0.2536
-  }
-}
-```
-
-The backtesting engine returns a detailed response containing configuration, evaluation period, signal coverage, performance metrics, benchmark data, equity curves, trade history, and individual trading signals.
-
-*Sample output from a five-year AAPL backtest using $10,000 initial capital. Results are historical simulations, not predictions.*
+Handled domain errors, request-schema validation errors, and database failures generally return `{"error":{"code":"...","message":"..."}}`. Examples include 422 `invalid_ticker` or `invalid_request`, 404 `no_market_data`, 502 provider or benchmark errors, and 500 `database_error` or `internal_error`. A missing backtest ID is HTTP 404 with FastAPI's `{"detail":"Backtest 42 not found"}` shape. Reversed analysis-history dates are HTTP 422 with `{"detail":"start_date must be on or before end_date"}`. Readiness failure uses its separate 503 `{"status":"unavailable"}` response. Ranking may instead return HTTP 200 with per-ticker failures under `errors`. Error formats therefore vary by handler.
 
 ## Backtesting Methodology
 
@@ -343,7 +354,7 @@ pytest -q
 
 Market data is mocked during testing, so live market-data access and OpenAI credentials are not required.
 
-PostgreSQL integration tests are opt-in and require an explicitly configured, dedicated `alphawatch_test` database. Setup instructions will be added in a later phase.
+PostgreSQL integration tests are opt-in and require an explicitly configured, dedicated `alphawatch_test` database; follow the separate integration-test instructions above.
 
 ## Current Scope & Limitations
 
@@ -351,10 +362,8 @@ AlphaWatch is an actively developed research prototype.
 
 The current implementation does not include:
 
-- Persistent database storage.
 - User authentication or account management.
 - Fundamental financial statement analysis.
 - Financial news integration.
-- A web-based frontend.
 
 The market-data integration uses yfinance for prototyping. Provider terms and data licensing should be reviewed before production use.

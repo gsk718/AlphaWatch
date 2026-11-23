@@ -9,6 +9,7 @@ from typing import Literal
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from openai import OpenAI
@@ -91,6 +92,24 @@ def _persist(db: Session, record) -> None:
         raise PersistenceFailure() from exc
 
 app = FastAPI(title="AlphaWatch API", version="1.1.0", description="Point-in-time technical stock analysis API")
+
+def _cors_origins() -> list[str]:
+    """Return local development origins plus explicitly configured trusted origins."""
+    configured = os.getenv("CORS_ORIGINS", "")
+    origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    origins.extend(origin.strip() for origin in configured.split(",") if origin.strip())
+    if any("*" in origin for origin in origins):
+        raise ValueError("CORS_ORIGINS must contain explicit origins; wildcard origins are not allowed.")
+    return list(dict.fromkeys(origins))
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins(),
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
 
 
 class HealthResponse(BaseModel):

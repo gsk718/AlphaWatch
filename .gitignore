@@ -9,6 +9,26 @@ venv/
 
 # Environment variables
 .env
+.env.*
+!.env.example
+
+# Node dependencies
+node_modules/
+
+# Vite and build output
+dist/
+.vite/
+
+# Frontend environment files
+.env.local
+.env.*.local
+
+# Vercel local configuration
+.vercel/
+
+# Test and build artifacts
+coverage/
+*.tsbuildinfo
 
 # OS junk
 .DS_Store

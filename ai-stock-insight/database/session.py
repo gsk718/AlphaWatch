@@ -16,16 +16,30 @@ load_dotenv(PROJECT_ROOT / ".env")
 _DEFAULT_DATABASE_URL = "postgresql+psycopg:///alphawatch"
 
 
+def _is_production() -> bool:
+    """Recognize Render and conventional production environment markers."""
+    import os
+
+    return os.getenv("RENDER", "").strip().lower() in {"1", "true", "yes"} or any(
+        os.getenv(name, "").strip().lower() == "production"
+        for name in ("ENVIRONMENT", "APP_ENV")
+    )
+
+
 def _database_url() -> URL:
-    """Read DATABASE_URL, defaulting to the local AlphaWatch database.
+    """Read DATABASE_URL, with a local-only AlphaWatch development fallback.
 
     PostgreSQL URLs without an explicit driver are directed to Psycopg 3,
     so installations do not accidentally fall back to the Psycopg 2 driver.
     """
     import os
 
-    raw_url = os.getenv("DATABASE_URL", _DEFAULT_DATABASE_URL).strip()
+    raw_url = os.getenv("DATABASE_URL", "").strip()
     if not raw_url:
+        if _is_production():
+            raise RuntimeError(
+                "DATABASE_URL must be set to a non-blank value in production."
+            )
         raw_url = _DEFAULT_DATABASE_URL
     url = make_url(raw_url)
     if url.drivername in {"postgres", "postgresql"}:

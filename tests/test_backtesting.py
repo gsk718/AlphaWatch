@@ -347,6 +347,12 @@ def test_backtest_api_validation_and_response(monkeypatch):
     assert configured.status_code == 200
     assert captured["config"].indicator_windows.ma_long == 120
     assert captured["config"].effective_warmup_days > 90
+    defaults = client.post("/backtest", json=payload)
+    assert defaults.status_code == 200
+    assert captured["config"].indicator_windows.ma_short == 5
+    assert captured["config"].indicator_windows.ma_long == 20
+    invalid_windows = client.post("/backtest", json={**payload, "ma_short_window": 20, "ma_long_window": 5})
+    assert invalid_windows.status_code == 422
     monkeypatch.setattr(main, "run_backtest", lambda config: (_ for _ in ()).throw(InsufficientDataError()))
     assert client.post("/backtest", json=payload).json()["error"]["code"] == "insufficient_data"
     monkeypatch.setattr(main, "run_backtest", lambda config: (_ for _ in ()).throw(InsufficientWarmupError()))
