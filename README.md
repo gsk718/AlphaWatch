@@ -2,11 +2,18 @@
 
 **A full-stack stock research and historical backtesting platform built with FastAPI and React.**
 
-AlphaWatch combines a browser dashboard with the existing API for technical analysis, signal ranking, and historical portfolio simulation.
+[**Open the live demo**](https://alphawatch.gauravdevport.com) · [GitHub repository](https://github.com/gsk718/AlphaWatch)
+
+AlphaWatch is a stock research dashboard for analyzing individual tickers, comparing technical signals across a watchlist, and simulating historical trading strategies. It also saves analysis and backtest results so they can be reviewed later. Market data is retrieved on demand through Yahoo Finance.
 
 The project focuses on backend engineering, including modular architecture, REST API design, input validation, concurrent data retrieval, error handling, portfolio simulation, and automated testing.
 
 ## Features
+
+- Stock analysis with technical indicators and transparent signal contributions.
+- Stock rankings for comparing signal strength across multiple tickers.
+- Configurable historical backtesting with strategy and SPY benchmark results.
+- Persistent analysis history and backtest history with detailed result inspection.
 
 ### Technical Analysis & Signal Generation
 
@@ -59,41 +66,40 @@ The project focuses on backend engineering, including modular architecture, REST
 | React, TypeScript, Vite | Browser dashboard |
 | Recharts, Tailwind CSS, Lucide | Financial charts, styling, and iconography |
 
+## Screenshots
+
+| Screenshot | Feature |
+|---|---|
+| ![AlphaWatch overview dashboard with quick analysis and recent activity](assets/screenshots/screenshot-1.png) | **Overview dashboard** — quick analysis, connection status, and recent analysis and backtest activity. |
+| ![AAPL stock analysis with signal score and technical indicator contributions](assets/screenshots/screenshot-2.png) | **Stock analysis** — latest signal, composite score, and trend, RSI, and momentum contributions. |
+| ![Stock rankings leaderboard comparing AAPL, COST, NVDA, and SNAP](assets/screenshots/screenshot-3.png) | **Stock rankings** — a scored leaderboard with technical signals for the selected tickers. |
+| ![AAPL historical backtest results with portfolio metrics and equity curve](assets/screenshots/screenshot-4.png) | **Backtesting** — strategy configuration, portfolio metrics, and historical equity curve. |
+
 ## Architecture
 
-AlphaWatch separates data retrieval, indicator calculations, signal scoring, API handling, and backtesting into modular components.
+The production dashboard sends API requests to the FastAPI service. The backend retrieves market data and reads or writes analysis and backtest records in PostgreSQL.
 
-```text
-               React Dashboard / CLI
-                       |
-                       v
-                    FastAPI
-                       |
-          +------------+------------+
-          |            |            |
-       Analysis     Ranking     Backtesting
-          |            |            |
-          +------------+------------+
-                       |
-                       v
-                  Data Fetcher
-                       |
-                       v
-              Technical Indicators
-                       |
-                       v
-                Signal Scoring
-                       |
-             +---------+---------+
-             |                   |
-        API Response       Portfolio Engine
-                                   |
-                                   v
-                           Performance Metrics
-                                   |
-                                   v
-                              SPY Benchmark
+```mermaid
+flowchart LR
+    Browser[React / TypeScript / Vite frontend<br/>Vercel]
+    API[FastAPI / Python backend<br/>Render]
+    DB[(PostgreSQL database<br/>Supabase)]
+    Market[Yahoo Finance market data]
+
+    Browser -->|HTTPS API requests| API
+    API -->|SQL queries and result persistence| DB
+    API -->|Market data requests| Market
 ```
+
+## Production Deployment
+
+- **Frontend:** React, TypeScript, and Vite dashboard hosted on Vercel.
+- **Backend:** FastAPI and Python API hosted on Render.
+- **Database:** PostgreSQL hosted on Supabase.
+
+The browser dashboard calls the Render API over HTTPS. The API retrieves market data on demand and connects to Supabase PostgreSQL using `DATABASE_URL` to persist analyses and backtests and serve their history. The backend's `CORS_ORIGINS` setting allows the deployed dashboard origin to make browser requests.
+
+The application architecture also separates data retrieval, indicator calculations, signal scoring, API handling, and backtesting into modular components.
 
 ## Getting Started
 
